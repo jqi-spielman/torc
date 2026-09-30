@@ -15,17 +15,12 @@ All quantities are in SI units: positions in metres, currents in amps, and field
 in tesla. Convenience constants (:data:`mm`, :data:`cm`, :data:`inch`,
 :data:`gauss`, :data:`gauss_per_cm`) are provided for unit conversions.
 
-3D visualisation of coil geometry is available via :meth:`CurrentObject.show`,
-which uses pyqtgraph/OpenGL.
+3D visualisation of coil geometry are disabled to prevent conflicts with labscript requirements.
 """
 
 import numpy as np
 from scipy.special import ellipk, ellipe
 from scipy.constants import mu_0
-import pyqtgraph as pg
-import pyqtgraph.opengl as gl
-from pyqtgraph.Qt import QtGui
-from pyqtgraph.Qt.QtCore import Qt
 
 #: Millimetres — multiply by this to convert mm to metres.
 mm = 1e-3
@@ -207,76 +202,6 @@ def _cross(a, b):
     return np.array([x, y, z])
 
 
-def _srgb_to_linear(c):
-    c = np.asarray(c)
-    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
-
-
-def _linear_to_srgb(c):
-    c = np.asarray(c)
-    return np.where(c <= 0.0031308, 12.92 * c, 1.055 * c ** (1 / 2.4) - 0.055)
-
-
-def _reinhard_luminance_tonemap(rgb_linear):
-    """Compress HDR linear RGB rgb_linear, shape (..., 3) to [0,1] via Reinhard,
-    preserving hue."""
-    BT709_LUMINANCE = np.array([0.2126, 0.7152, 0.0722])
-    lum = rgb_linear @ BT709_LUMINANCE
-    mapped = lum / (1 + lum)
-    return rgb_linear * (mapped / (lum + 1e-12))[..., np.newaxis]
-
-
-def _do_shading_normals(normals, color, r_light=(1,2,3), ambient=0.1):
-    # Return shaded RGBA colours (as floats 0–1, with alpha always 1) for each face
-    # based on angle to a fixed light source verts: n×3 array of points specifying x,y,z
-    # coords of a list of vertices faces: m×3 array of indices into verts specifying a
-    # list of triangles. Color should be a 3-tuple of floats 0–1.
-
-    # normals should have vector dimension last, can have arbitrary other dimensions
-
-    normals /= np.linalg.norm(normals, axis=-1, keepdims=True) + 1e-12
-
-    r_light = _unit(r_light)
-
-    # Compute intensity for angle, such that average intensity over all angles is 1.0 +
-    # ambient:
-    AVG_ILLUMINATION = 2 / np.pi
-
-    intensity = np.abs(normals @ r_light) / AVG_ILLUMINATION
-
-    # add some ambient so nothing is fully black
-    intensity += ambient / AVG_ILLUMINATION
-
-    # Convert desired colour to linear colour space, apply intensity factor, tone map to
-    # displayable range, then convert back to SRGB:
-    hdr_linear = intensity[..., np.newaxis] * _srgb_to_linear(color)
-    ldr_linear = _reinhard_luminance_tonemap(hdr_linear)
-    face_colors_srgb = _linear_to_srgb(ldr_linear)
-
-    # Extend to RGBA    
-    face_colors = np.concat(
-        [face_colors_srgb, np.ones_like(face_colors_srgb[..., :1])], axis=-1
-    )
-    return face_colors
-
-
-def _do_shading_mesh(mesh, color, r_light=(1, 2, 3), ambient=0.1):
-    mesh = mesh.transpose((1, 2, 0))
-    # Corners of quads
-    r0 = mesh[:-1, :-1]
-    r1 = mesh[1:, :-1]
-    r2 = mesh[1:, 1:]
-    r3 = mesh[:-1, 1:]
-    # cross product of diagonals:
-    normals = np.cross(r2 - r0, r3 - r1)
-    return _do_shading_normals(normals, color, r_light=r_light, ambient=ambient)
-
-
-def _do_shading_triangles(verts, faces, color, r_light=(1, 2, 3), ambient=0.1):
-    # face normals via cross product of triangle edges
-    v0, v1, v2 = verts[faces[:, 0]], verts[faces[:, 1]], verts[faces[:, 2]]
-    normals = np.cross(v1 - v0, v2 - v0)
-    return _do_shading_normals(normals, color, r_light=r_light, ambient=ambient)
 
 
 class CurrentObject(object):
@@ -489,155 +414,6 @@ class CurrentObject(object):
         describe their geometry for visualisation. The base class returns an empty
         list."""
         return []
-
-    # def show_mpl(
-    #     self, surfaces=True, lines=False, color=COPPER, **kwargs
-    # ):
-    #     from mpl_toolkits import mplot3d
-    #     import matplotlib.pyplot as plt
-
-    #     ax = plt.axes(projection='3d')
-
-    #     # Aspect ratio
-    #     asp_x, asp_y, asp_z = 0, 0, 0
-
-    #     if surfaces:
-    #         surfaces = self.surfaces()
-    #         for x, y, z in surfaces:
-    #             ax.plot_surface(x, y, z, color=color, **kwargs)
-    #             asp_x = max(asp_x, np.ptp(x))
-    #             asp_y = max(asp_y, np.ptp(y))
-    #             asp_z = max(asp_z, np.ptp(z))
-    #     if lines:
-    #         lines = self.lines()
-    #         for x, y, z in lines:
-    #             ax.plot3D(x, y, z, color=color, **kwargs)
-    #             asp_x = max(asp_x, np.ptp(x))
-    #             asp_y = max(asp_y, np.ptp(y))
-    #             asp_z = max(asp_z, np.ptp(z))
-                
-    #     ax.set_box_aspect((asp_x, asp_y, asp_z))
-    #     plt.show()
-
-    def show(self, surfaces=True, lines=False, line_width=5, color=COPPER, blocking=True):
-        """Open an interactive 3D pyqtgraph/OpenGL window displaying this object's
-        geometry.
-
-        Args:
-            surfaces (bool): Whether to render solid surfaces. Defaults to
-                ``True``.
-            lines (bool): Whether to render current lines. Defaults to
-                ``False``.
-            color (tuple): RGB colour as a 3-tuple of floats in ``[0, 1]``.
-                Defaults to :data:`COPPER`.
-            blocking (bool): Whether to enter the Qt event loop, blocking
-                until the window is closed. Defaults to ``True``. To block
-                later, e.g. after adding additional items to the view or
-                creating multiple views, call ``app=pg.mkQApp(); app.exec()``.
-      
-        Returns:
-            pyqtgraph.opengl.GLViewWidget: The view widget.
-      """
-        VIEW_WIDTH = 800
-        VIEW_HEIGHT = 600
-        VIEW_FOV = 5
-
-        app = pg.mkQApp()
-
-        # Share GL contexts - otherwise can't make multiple view widgets
-        app.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
-
-        view = gl.GLViewWidget()
-
-        # Antialiasing:
-        fmt = QtGui.QSurfaceFormat()
-        fmt.setSamples(16)
-        view.setFormat(fmt)
-
-        # Variable to store vertices for debugging
-        all_verts = []
-        
-        if surfaces:
-            surfaces_data = self.surfaces()
-            for x, y, z in surfaces_data:
-                # Print surface info for debugging
-                # print(f"Surface shape: {x.shape}, Z range: {np.min(z)}-{np.max(z)}")
-                
-                # Convert meshgrid format to vertices and faces for GLMeshItem
-                verts = np.column_stack([x.ravel(), y.ravel(), z.ravel()])
-                all_verts.extend(verts)
-
-                nrows, ncols = x.shape
-                i, j = np.mgrid[: nrows - 1, : ncols - 1]
-                idx = (i * ncols + j).ravel()
-                faces = np.column_stack(
-                    [
-                        idx,
-                        idx + 1,
-                        idx + ncols,
-                        idx + ncols,
-                        idx + 1,
-                        idx + ncols + 1,
-                    ]
-                ).reshape(-1, 3)
-                
-                mesh = gl.GLMeshItem(
-                    vertexes=verts,
-                    faces=faces,
-                    faceColors=_do_shading_triangles(verts, faces, color),
-                    smooth=False,
-                    computeNormals=False,
-                    glOptions='translucent',
-                )
-                view.addItem(mesh)
-        
-        if lines:
-            lines_data = self.lines()
-            for x, y, z in lines_data:
-                # Print line info for debugging
-                # print(f"Line shape: {x.shape}, Z range: {np.min(z)}-{np.max(z)}")
-                
-                # Create line path
-                pts = np.vstack([x, y, z]).T
-                all_verts.extend(pts)
-
-                line = gl.GLLinePlotItem(
-                    pos=pts,
-                    color=(*color, 1.0),
-                    width=line_width,
-                    # mode='lines',
-                    antialias=True,
-                )
-                view.addItem(line)
-        
-        # Midpoint and extent of data:
-        if all_verts:
-            r = np.array(all_verts)
-            r0 = (r.max(axis=0) + r.min(axis=0)) / 2
-            rmax = np.sqrt(((r - r0) ** 2).sum(axis=1)).max()
-        else:
-            r0 = ORIGIN
-            rmax = 1
-
-        # Camera and scene params:
-        view.resize(VIEW_WIDTH, VIEW_HEIGHT)
-        view.setBackgroundColor('white')
-
-        view.opts['fov'] = VIEW_FOV
-        view.setCameraParams(elevation=35.264, azimuth=-135)
-
-        view.opts['center'] = pg.Vector(*r0)
-        theta_fov = VIEW_FOV * np.pi / 180
-        view.opts['distance'] = (
-            max(VIEW_WIDTH / VIEW_HEIGHT, 1) * rmax / np.tan(theta_fov / 2)
-        )
-
-        view.show()
-
-        if blocking:
-            app.exec()
-
-        return view
     
     def __str__(self):
         return _formatobj(self, 'name')

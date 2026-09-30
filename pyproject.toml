@@ -32,9 +32,6 @@ dependencies = [
     "numpy",
     "scipy",
     "matplotlib", # needed for examples
-    "pyqtgraph",
-    "PySide6",
-    "pyopengl"
 ]
 dynamic = ["version"]
 
